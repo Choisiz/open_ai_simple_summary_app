@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
 
 export async function POST(req) {
   try {
@@ -21,6 +22,7 @@ export async function POST(req) {
       );
     }
 
+    //요약기능
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -79,8 +81,62 @@ export async function POST(req) {
     }
 
     const data = await response.json();
+    const summary = data.choices[0].message.content;
+
+    //임베딩 생성(백터검색)
+    const embeddingResponse = await fetch(
+      "https://api.openai.com/v1/embeddings",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "text-embedding-3-small",
+          input: textContent,
+        }),
+      }
+    );
+
+    if (!embeddingResponse.ok) {
+      console.error("임베딩 생성 실패:", embeddingResponse.status);
+      // 임베딩 실패해도 요약은 반환
+      return NextResponse.json({ summary });
+    }
+
+    const embeddingData = await embeddingResponse.json();
+    const embedding = embeddingData.data[0].embedding;
+
+    // Supabase에 저장
+    console.log("Supabase에 저장 중...");
+    const { data: savedData, error: saveError } = await supabase
+      .from("summaries")
+      .insert([
+        {
+          original_text: textContent,
+          summary: summary,
+          embedding: embedding,
+          title: `요약 ${new Date().toLocaleDateString("ko-KR")}`,
+        },
+      ])
+      .select();
+
+    if (saveError) {
+      console.error("Supabase 저장 오류:", saveError);
+      // 저장 실패해도 요약은 반환
+      return NextResponse.json({
+        summary,
+        warning: "요약은 성공했지만 저장에 실패했습니다.",
+      });
+    }
+
+    console.log("저장 완료:", savedData[0].id);
+
     return NextResponse.json({
-      summary: data.choices[0].message.content,
+      summary,
+      saved: true,
+      id: savedData[0].id,
     });
   } catch (e) {
     console.log("요약본 생성오류", e);
